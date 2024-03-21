@@ -64,6 +64,52 @@ void initGPIOAsADCPPin(void);
 void initLEDs(void);
 void lab_6_1(void);
 void initGPIOAsDACPPin(void);
+void initUsart3(void);
+void turnUint32ToBinaryStr(uint32_t x);
+
+void initUsart3(void) {
+	RCC->AHBENR |= RCC_AHBENR_GPIOCEN; // Enable peripheral clock to PC
+	// PC4 TX, PC5 RX
+	// set pc4 to AF mode, 0x10
+	GPIOC->MODER |= (1 << 9);
+	GPIOC->MODER &= ~(1 << 8);
+	// set pc5 to AF mode, 0x10
+	GPIOC->MODER |= (1 << 11);
+	GPIOC->MODER &= ~(1 << 10);
+	
+	// set PC4 AFRL to 0001: AF1
+	GPIOC->AFR[0] |= (0x1 << GPIO_AFRL_AFRL4_Pos);
+	// set PC5 AFRL to 0001: AF1
+	GPIOC->AFR[0] |= (0x1 << GPIO_AFRL_AFRL5_Pos);
+  RCC->APB1ENR |= RCC_APB1ENR_USART3EN;
+
+	uint32_t fClk = HAL_RCC_GetHCLKFreq();
+	
+	// set baud rate
+	uint32_t baudRate = 115200;
+	uint32_t usartBRR = fClk / baudRate;
+	USART3->BRR = usartBRR;
+
+	// enable the transmitter and receiver hardware of USART3
+	USART3->CR1 |= USART_CR1_TE;
+	USART3->CR1 |= USART_CR1_RE;
+	
+	// Enable USART peripheral.
+	USART3->CR1 |= USART_CR1_UE;
+}
+
+void transmitOneChar(uint8_t ch) {
+  while ((USART3->ISR & USART_ISR_TXE) == 0) {
+	}
+	USART3->TDR = ch;
+}
+
+void transmitCharArray (char *arr) {
+  while (*arr != '\0') {
+		transmitOneChar(*arr);
+		arr++;
+	}
+}
 
 void initLEDs(void) {
 	// red LED PC6, blue LED (PC7), green LED PC9, orange LED PC8
@@ -114,12 +160,12 @@ void initGPIOAsADCPPin(void) {
 	//  hardware triggers disabled (software trigger only)
 	ADC1->CFGR1 &= (~ADC_CFGR1_EXTEN_Msk);
 	// Enable channel 10,  Select/enable the input pin’s channel for ADC conversion.
-	ADC1->CHSELR |= (1 << 10);
+	ADC1->CHSELR |= ADC_CHSELR_CHSEL10;
 	
 	// Perform a self-calibration
 	if ((ADC1->CR & ADC_CR_ADEN) != 0) {
 	  ADC1->CR &= (~ADC_CR_ADEN);
-	}	
+	}
 	if((ADC1->CFGR1 & ADC_CFGR1_DMAEN) != 0) {
 		ADC1->CFGR1 &= (~ADC_CFGR1_DMAEN);
 	}
@@ -136,15 +182,19 @@ void initGPIOAsADCPPin(void) {
 	// Wait until ADRDY = 1 in the ADC_ISR register
 	while ((ADC1->ISR & ADC_ISR_ADRDY) == 0) {
 	}
+	
+	ADC1->CR |= ADC_CR_ADSTART;
 }
 
-
-
-void initGPIOAsDACPPin(void) {
+void lab_6_2(void) {
+	initUsart3();
 	// PA4, DAC_OUT1
 	RCC->AHBENR |= RCC_AHBENR_GPIOAEN; // Enable peripheral clock to PA
+	RCC->APB1ENR |= RCC_APB1ENR_DACEN;
 	// Configure the pin to analog mode
 	GPIOA->MODER |= ((1 << 8) | (1 << 9));
+	// no pull-up/down resistors, 00
+	GPIOA->PUPDR &= ~((1 << 8) | (1 << 9));
 	// Set the used DAC channel to software trigger mode
 	DAC1->SWTRIGR |= (0x1);
 	// Enable DAC channel 1
@@ -154,29 +204,48 @@ void initGPIOAsDACPPin(void) {
   const uint8_t sine_table[32] = {127,151,175,197,216,232,244,251,254,251,244,
       232,216,197,175,151,127,102,78,56,37,21,9,2,0,2,9,21,37,56,78,102};
 	while (1) {
+		//transmitCharArray("write data:\n");
+		//turnUint32ToBinaryStr(sine_table[index % 32]);
 	  DAC1->DHR8R1 = sine_table[index % 32];
 		index++;
 		HAL_Delay(1);
 	}
 }
 
+void turnUint32ToBinaryStr(uint32_t x){
+	char str[32];
+	uint32_t i = 0;
+	while (i < 32) {
+		str[31-i] = '0' + ((x >> i) & 0x1);
+	  i++;
+	}
+	transmitCharArray(str);
+}
+
 void lab_6_1(void) {
   initLEDs();
+	initUsart3();
 	initGPIOAsADCPPin();
 	int16_t minVal = 0;
 	int16_t maxVal = 0;
 	int16_t th1 = 0, th2 = 0, th3 = 0;
+	int16_t prevData = 0;
 	while (1) {
 	  int16_t data = ADC1->DR;
-		if (data > maxVal) {
+		if (prevData != data) {
+		  transmitCharArray("Data:\n");
+		  turnUint32ToBinaryStr(data);
+		}
+		prevData = data;
+		if ( data > maxVal) {
 		  maxVal = data;
 		}
 		if (data < minVal) {
 		  minVal = data;
 		}
-		th1 = minVal + (maxVal - minVal) / 4;
-		th2 = minVal + (maxVal - minVal) / 2;
-		th3 = minVal + 3 * (maxVal - minVal) / 4;
+		th1 = 60;//minVal + (maxVal - minVal) / 4;
+		th2 = 120; //minVal + (maxVal - minVal) / 2;
+		th3 = 180;//minVal + 3 * (maxVal - minVal) / 4;
 		if (data <= th1) {
 		  GPIOC->ODR |= (1 << 6);
 			GPIOC->ODR &= ~((1 << 7) | (1 << 8) | (1 << 9));
@@ -219,7 +288,8 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
-  initLEDs();
+	// lab_6_1();
+	lab_6_2();
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
